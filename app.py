@@ -3,13 +3,15 @@ import pandas as pd
 import feedparser
 import plotly.graph_objects as go
 import requests
-import io
-import yfinance as yf
 from datetime import datetime
 
 # ページ設定
 st.set_page_config(page_title="Real Stock Analyst", layout="wide")
-st.title("📈 米国株AI分析 (Browser Mask版)")
+st.title("📈 米国株AI分析 (Professional API版)")
+
+# --- ★ここに取得したAPIキーを貼り付けてください ---
+# 例: API_KEY = "abc123456789..."
+API_KEY = "aaa2294ad1124462b54f453da3a8dc3b" 
 
 # 有名銘柄リスト
 FAMOUS_STOCKS = {
@@ -29,20 +31,13 @@ st.sidebar.header("銘柄選択")
 selected_name = st.sidebar.selectbox("分析対象", list(FAMOUS_STOCKS.keys()))
 ticker = FAMOUS_STOCKS[selected_name]
 
-# --- 共通設定: ブラウザ偽装用ヘッダー ---
-FAKE_BROWSER_HEADER = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-}
-
-# --- 関数: ニュース取得 ---
+# --- 関数: ニュース取得 (Google News RSS - これは安定) ---
 @st.cache_data(ttl=600)
 def get_google_news(ticker):
-    """Google News RSSから取得"""
     query = f"{ticker} stock"
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
     try:
-        response = requests.get(rss_url, headers=FAKE_BROWSER_HEADER, timeout=5)
-        feed = feedparser.parse(response.content)
+        feed = feedparser.parse(rss_url)
         news_items = []
         for entry in feed.entries[:5]:
             news_items.append({
@@ -51,54 +46,43 @@ def get_google_news(ticker):
                 'published': entry.published
             })
         return news_items
-    except Exception:
+    except:
         return []
 
-# --- 関数: 株価取得 (メイン: Stooq) ---
-def get_data_from_stooq(ticker):
-    """StooqからブラウザのふりをしてCSVをダウンロード"""
-    url = f"https://stooq.com/q/d/l/?s={ticker}.us&i=d"
+# --- 関数: 株価取得 (Twelve Data API - 正規ルート) ---
+@st.cache_data(ttl=3600) # 1時間キャッシュして回数を節約
+def get_stock_price(ticker, api_key):
+    """Twelve Data APIから正規にデータを取得"""
+    if "ここに" in api_key: # キーが未入力の場合
+        return None, "NoKey"
+
+    url = f"https://api.twelvedata.com/time_series?symbol={ticker}&interval=1day&outputsize=365&apikey={api_key}"
+    
     try:
-        # ここが重要！requestsを使ってヘッダー付きでアクセスする
-        response = requests.get(url, headers=FAKE_BROWSER_HEADER, timeout=10)
+        response = requests.get(url).json()
         
-        if response.status_code == 200:
-            # 文字列データをメモリ上のファイルとして扱う
-            csv_data = io.BytesIO(response.content)
-            df = pd.read_csv(csv_data)
+        if "values" not in response:
+            return None, "Error"
             
-            # データ整形
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            df = df.sort_index()
-            return df.tail(500)
-        return None
-    except Exception:
-        return None
-
-# --- 関数: 株価取得 (予備: Yahoo) ---
-def get_data_from_yahoo(ticker):
-    """Stooqがダメな時の保険"""
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="2y")
-        return df
-    except Exception:
-        return None
-
-# --- メインデータ取得関数 ---
-@st.cache_data(ttl=600)
-def get_stock_data(ticker):
-    # 1. まずStooqを試す
-    df = get_data_from_stooq(ticker)
-    source = "Stooq"
-    
-    # 2. ダメならYahooを試す
-    if df is None or df.empty:
-        df = get_data_from_yahoo(ticker)
-        source = "Yahoo Finance"
-    
-    return df, source
+        # データ整形
+        df = pd.DataFrame(response['values'])
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df.set_index('datetime', inplace=True)
+        
+        # 数値型に変換
+        cols = ['open', 'high', 'low', 'close']
+        for c in cols:
+            df[c] = pd.to_numeric(df[c])
+            
+        # 日付の古い順に並べ替え
+        df = df.sort_index()
+        
+        # 列名をCapitalize (Open, High...)
+        df.columns = [c.capitalize() for c in df.columns]
+        
+        return df, "Success"
+    except Exception as e:
+        return None, str(e)
 
 # --- 分析ロジック ---
 def analyze_market(df, news_list):
@@ -130,16 +114,16 @@ def analyze_market(df, news_list):
     # RSI
     if current_rsi < 30:
         score += 2
-        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.0f}) → 反発期待")
+        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.0f}) → 買い好機")
     elif current_rsi > 70:
         score -= 2
         reasons.append(f"🔴 [RSI] 買われすぎ ({current_rsi:.0f}) → 過熱感あり")
     else:
         reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.0f})")
 
-    # ニュース
-    keywords_good = ['record', 'surge', 'jump', 'buy', 'beat', 'high', 'up']
-    keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'low', 'down']
+    # ニュース判定
+    keywords_good = ['record', 'surge', 'jump', 'buy', 'beat', 'high', 'up', 'profit']
+    keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'low', 'down', 'fail']
     
     news_score = 0
     if news_list:
@@ -172,27 +156,25 @@ def analyze_market(df, news_list):
     return judgment, reasons, color
 
 # --- UI構築 ---
-with st.spinner('データを取得しています...'):
-    df, source = get_stock_data(ticker)
+with st.spinner('正規APIからデータを取得中...'):
+    df, status = get_stock_price(ticker, API_KEY)
     news_items = get_google_news(ticker)
 
-    if df is not None and not df.empty:
+    if status == "NoKey":
+        st.error("⚠️ APIキーが設定されていません")
+        st.info("1. https://twelvedata.com/ で無料キーを取得\n2. app.pyの `API_KEY` の部分に貼り付けてください")
+    
+    elif df is not None and not df.empty:
         # 基本情報
         current_price = df['Close'].iloc[-1]
-        
-        # 前日比
-        if len(df) >= 2:
-            prev_price = df['Close'].iloc[-2]
-            change = current_price - prev_price
-            pct = (change / prev_price) * 100
-        else:
-            change = 0
-            pct = 0
+        prev_price = df['Close'].iloc[-2]
+        change = current_price - prev_price
+        pct = (change / prev_price) * 100
         
         col1, col2 = st.columns(2)
         col1.metric("株価", f"${current_price:.2f}")
         col2.metric("前日比", f"{change:+.2f} ({pct:+.2f}%)")
-        st.caption(f"Data Source: {source}") # どっちから取れたか表示
+        st.caption("Data Source: Twelve Data API (Official)")
 
         # AI判定
         judgment, reasons, color = analyze_market(df, news_items)
@@ -224,5 +206,5 @@ with st.spinner('データを取得しています...'):
             st.info("ニュースなし")
 
     else:
-        st.error(f"データの取得に失敗しました。({ticker})")
-        st.write("対策: 数分待ってリロードするか、銘柄を変えてみてください。")
+        st.error(f"データ取得エラー: {status}")
+        st.write("APIの制限回数（1分間に8回）を超えた可能性があります。少し待ってからリロードしてください。")
