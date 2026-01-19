@@ -4,3 +4,4 @@ plotly
 pandas
 feedparser
 requests
+requests-cache
