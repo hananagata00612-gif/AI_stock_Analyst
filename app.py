@@ -5,7 +5,7 @@ import pandas as pd
 
 # ページ設定
 st.set_page_config(page_title="AI Stock Analyst Pro", layout="wide")
-st.title("📈 米国株 AI分析アプリ (News付)")
+st.title("📈 米国株 AI分析アプリ (Pro版)")
 
 # 有名銘柄リスト
 FAMOUS_STOCKS = {
@@ -26,18 +26,23 @@ ticker = FAMOUS_STOCKS[selected_name]
 
 # --- 関数定義 ---
 
+# ★ここが修正ポイント：データを10分間(600秒)保存して、アクセス制限を回避する
+@st.cache_data(ttl=600)
 def get_data(ticker):
     """株価とニュースを取得"""
     stock = yf.Ticker(ticker)
     # 期間を2年に設定
     hist = stock.history(period="2y")
     info = stock.info
-    news = stock.news  # yfinanceの標準機能でニュースを取得
+    try:
+        news = stock.news
+    except:
+        news = []
     return hist, info, news
 
 def analyze_trend(df):
     """テクニカル分析ロジック"""
-    if len(df) == 0:
+    if df is None or len(df) == 0:
         return "判定不能", [], "gray"
     
     # 指標計算
@@ -89,9 +94,9 @@ def analyze_trend(df):
 
 # --- メイン処理 ---
 try:
+    # データを取得
     hist, info, news = get_data(ticker)
     
-    # データの有無を確認（ここが途切れていました）
     if hist is not None and not hist.empty:
         
         # 1. 基本データ表示
@@ -123,7 +128,7 @@ try:
             st.info("現在、関連ニュースが見つかりませんでした。")
             
     else:
-        st.error("データの取得に失敗しました。")
+        st.error("データの取得に失敗しました。少し時間をおいてリロードしてください。")
 
 except Exception as e:
-    st.error(f"システムエラー: {e}")
+    st.warning("アクセスが集中しています。数分待ってからリロードしてください。")
