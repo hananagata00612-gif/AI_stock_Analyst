@@ -1,7 +1,6 @@
 streamlit
-yfinance
-plotly
 pandas
+pandas_datareader
+plotly
 feedparser
 requests
-requests-cache
