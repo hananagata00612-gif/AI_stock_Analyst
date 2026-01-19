@@ -5,14 +5,14 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime
 
-# --- 1. ページ設定 (読み込み速度アップのため最優先) ---
+# --- 1. ページ設定 ---
 st.set_page_config(
     page_title="Stock AI Pro", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. 白飛び完全防止 (CSSで背景色を固定) ---
+# --- 2. スタイル設定 ---
 st.markdown("""
     <style>
         .stApp {
@@ -25,7 +25,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 米国株AI分析 (Speed & Stable)")
+st.title("📈 米国株AI分析 (Visual Status)")
 
 # --- ★APIキー設定 ---
 API_KEY = "aaa2294ad1124462b54f453da3a8dc3b" 
@@ -39,12 +39,11 @@ FAMOUS_STOCKS = {
 }
 
 st.sidebar.header("銘柄選択")
-# index=0 にすることで、リロード時に一番上の銘柄に戻るのを防ぐ工夫も可能ですが今回はシンプルに
 selected_name = st.sidebar.selectbox("分析対象", list(FAMOUS_STOCKS.keys()))
 ticker = FAMOUS_STOCKS[selected_name]
 
-# --- 関数: ニュース取得 (タイムアウト設定でフリーズ回避) ---
-@st.cache_data(ttl=600)
+# --- 関数: ニュース取得 ---
+@st.cache_data(ttl=600, show_spinner=False)
 def get_google_news(ticker):
     query = f"{ticker} stock"
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
@@ -54,10 +53,8 @@ def get_google_news(ticker):
     }
     
     try:
-        # ★重要: timeout=3 (3秒で返事がなければ諦めて次へ進む)
-        response = requests.get(rss_url, headers=headers, timeout=3)
+        response = requests.get(rss_url, headers=headers, timeout=5)
         feed = feedparser.parse(response.content)
-        
         news_items = []
         if feed.entries:
             for entry in feed.entries[:5]:
@@ -68,10 +65,10 @@ def get_google_news(ticker):
                 })
         return news_items
     except Exception:
-        return [] # エラーが出ても空リストを返してアプリを止めない
+        return []
 
-# --- 関数: 株価取得 (エラーハンドリング強化) ---
-@st.cache_data(ttl=3600)
+# --- 関数: 株価取得 ---
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_stock_price(ticker, api_key):
     if "ここに" in api_key:
         return None, "KeyError"
@@ -79,11 +76,10 @@ def get_stock_price(ticker, api_key):
     url = f"https://api.twelvedata.com/time_series?symbol={ticker}&interval=1day&outputsize=365&apikey={api_key}"
     
     try:
-        # ★重要: ここもtimeout設定
-        response = requests.get(url, timeout=5).json()
+        # タイムアウトを10秒に設定
+        response = requests.get(url, timeout=10).json()
         
         if "values" not in response:
-            # API制限(1分間に8回)に引っかかった場合など
             return None, "ApiLimit"
             
         df = pd.DataFrame(response['values'])
@@ -167,55 +163,71 @@ def analyze_market(df, news_list):
     return judgment, reasons, color
 
 # --- メイン処理 ---
-# ★スピナー（読み込み中のぐるぐる）を軽くする
-with st.spinner('Loading...'):
-    df, status = get_stock_price(ticker, API_KEY)
-    # ニュース取得は失敗しても株価表示を止めないように独立させる
-    news_items = get_google_news(ticker)
 
-    if status == "KeyError":
-        st.error("⚠️ APIキーを設定してください")
-    elif status == "ApiLimit":
-        st.warning("⚠️ API制限（1分間に8回）のためデータを取得できませんでした。少し待ってから別の銘柄を選んでください。")
-    elif status != "Success" or df is None:
-        st.error("データ取得エラー。リロードしてください。")
+# 1. 進捗を表示する「ステータスバー」を作成
+with st.status("AIがデータを分析中...", expanded=True) as status:
+    
+    st.write("1. 株価データを取得しています...")
+    df, api_status = get_stock_price(ticker, API_KEY)
+    
+    if api_status == "Success":
+        st.write("✅ 株価データの取得完了")
+    elif api_status == "ApiLimit":
+        st.warning("⚠️ APIの制限回数を超えました（1分待ってください）")
     else:
-        # 基本情報
-        current = df['Close'].iloc[-1]
-        prev = df['Close'].iloc[-2]
-        change = current - prev
-        pct = (change / prev) * 100
-        
-        col1, col2 = st.columns(2)
-        col1.metric("株価", f"${current:.2f}")
-        col2.metric("前日比", f"{change:+.2f} ({pct:+.2f}%)")
+        st.error("❌ 株価データの取得に失敗")
 
-        # AI判定
-        judgment, reasons, color = analyze_market(df, news_items)
-        st.markdown(f"""
-        <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center; background-color: rgba(255,255,255,0.05);">
-            <h2 style="color: {color}; margin:0;">AI判定: {judgment}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        for r in reasons:
-            st.write(r)
+    st.write("2. 関連ニュースを検索しています...")
+    news_items = get_google_news(ticker)
+    st.write("✅ ニュース検索完了")
+    
+    status.update(label="分析完了！", state="complete", expanded=False)
 
-        # チャート
-        st.subheader("📈 株価チャート")
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(x=df.index,
-                        open=df['Open'], high=df['High'],
-                        low=df['Low'], close=df['Close'], name='Price'))
-        fig.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
+# 2. 結果表示
+if api_status == "KeyError":
+    st.error("⚠️ APIキーを設定してください")
+elif api_status != "Success" or df is None:
+    if api_status == "ApiLimit":
+        st.warning("現在アクセスが集中しています。Twelve Dataの無料プランは「1分間に8回」の制限があります。少しゆっくり操作してください。")
+    else:
+        st.error("データの取得に失敗しました。リロードしてください。")
+else:
+    # 基本情報
+    current = df['Close'].iloc[-1]
+    prev = df['Close'].iloc[-2]
+    change = current - prev
+    pct = (change / prev) * 100
+    
+    col1, col2 = st.columns(2)
+    col1.metric("株価", f"${current:.2f}")
+    col2.metric("前日比", f"{change:+.2f} ({pct:+.2f}%)")
 
-        # ニュース
-        st.subheader("📰 Googleニュース")
-        if news_items:
-            for news in news_items:
-                pub = news['published'][:16]
-                st.markdown(f"**[{news['title']}]({news['link']})**")
-                st.caption(f"📅 {pub}")
-        else:
-            st.info("ニュースなし")
+    # AI判定
+    judgment, reasons, color = analyze_market(df, news_items)
+    st.markdown(f"""
+    <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center; background-color: rgba(255,255,255,0.05);">
+        <h2 style="color: {color}; margin:0;">AI判定: {judgment}</h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    for r in reasons:
+        st.write(r)
+
+    # チャート
+    st.subheader("📈 株価チャート")
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df.index,
+                    open=df['Open'], high=df['High'],
+                    low=df['Low'], close=df['Close'], name='Price'))
+    fig.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ニュース
+    st.subheader("📰 Googleニュース")
+    if news_items:
+        for news in news_items:
+            pub = news['published'][:16]
+            st.markdown(f"**[{news['title']}]({news['link']})**")
+            st.caption(f"📅 {pub}")
+    else:
+        st.info("ニュースなし")
