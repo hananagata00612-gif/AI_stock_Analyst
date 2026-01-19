@@ -1,85 +1,68 @@
 import streamlit as st
-import yfinance as yf
+import pandas_datareader.data as web
 import pandas as pd
 import feedparser
 import plotly.graph_objects as go
 import requests
-import requests_cache # これでYahooに何度も聞きに行かないようにする
 from datetime import datetime
 
 # ページ設定
 st.set_page_config(page_title="Real Stock Analyst", layout="wide")
-st.title("📈 実戦用 米国株AI分析 (Anti-Block版)")
+st.title("📈 米国株AI分析 (Stooq & Google版)")
 
-# 有名銘柄リスト
+# 有名銘柄リスト (Stooq用のシンボル)
 FAMOUS_STOCKS = {
-    "NVIDIA (AI半導体)": "NVDA",
-    "Apple (iPhone)": "AAPL",
-    "Microsoft (Windows/AI)": "MSFT",
-    "Tesla (EV)": "TSLA",
-    "Amazon (EC/Cloud)": "AMZN",
-    "Google (検索)": "GOOGL",
-    "Meta (SNS)": "META",
-    "Eli Lilly (製薬)": "LLY",
-    "Pfizer (製薬)": "PFE",
-    "JPMorgan (金融)": "JPM"
+    "NVIDIA": "NVDA",
+    "Apple": "AAPL",
+    "Microsoft": "MSFT",
+    "Tesla": "TSLA",
+    "Amazon": "AMZN",
+    "Google": "GOOGL",
+    "Meta": "META",
+    "Eli Lilly": "LLY",
+    "Pfizer": "PFE",
+    "JPMorgan": "JPM"
 }
 
 st.sidebar.header("銘柄選択")
 selected_name = st.sidebar.selectbox("分析対象", list(FAMOUS_STOCKS.keys()))
 ticker = FAMOUS_STOCKS[selected_name]
 
-# --- ★重要: ブロック対策用セッション作成 ---
-# キャッシュ有効化（データをsqliteファイルに保存して再利用）
-session = requests_cache.CachedSession('yfinance.cache')
-session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-
-# --- 関数: ニュース取得 (RSS) ---
+# --- 関数: Googleニュース取得 (RSS) ---
 @st.cache_data(ttl=600)
-def get_rss_news(ticker):
-    """Yahoo Finance RSS取得"""
-    rss_url = f'https://finance.yahoo.com/rss/headline?s={ticker}'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+def get_google_news(ticker):
+    """Google News RSSからニュースを取得"""
+    # 検索クエリを作成 (例: NVDA stock)
+    query = f"{ticker} stock"
+    rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+    
     try:
-        response = requests.get(rss_url, headers=headers, timeout=5)
-        feed = feedparser.parse(response.content)
+        feed = feedparser.parse(rss_url)
         news_items = []
-        for entry in feed.entries[:5]:
+        for entry in feed.entries[:5]: # 最新5件
             news_items.append({
                 'title': entry.title,
                 'link': entry.link,
-                'published': entry.published,
+                'published': entry.published
             })
         return news_items
     except Exception:
         return []
 
-# --- 関数: 株価取得 (セッション使用) ---
+# --- 関数: 株価取得 (Stooq) ---
 @st.cache_data(ttl=600)
 def get_stock_price(ticker):
+    """Stooqから株価データを取得"""
     try:
-        # ★ここで対策済みセッションを渡す
-        stock = yf.Ticker(ticker, session=session)
-        
-        # 期間を少し短くして負荷を下げる
-        hist = stock.history(period="1y")
-        
-        # infoが取れない場合のエラー回避
-        try:
-            info = stock.info
-        except:
-            # 最低限の情報だけ手動で作る（ブロックされた時の保険）
-            info = {
-                'currentPrice': hist['Close'].iloc[-1] if not hist.empty else 0,
-                'marketCap': 0,
-                'trailingPE': 0
-            }
-            
-        return hist, info
+        # Stooqからデータを取得 (過去2年分)
+        # Stooqは日付が新しい順で返ってくるので、sort_indexで古い順に並べ替える
+        df = web.DataReader(ticker, 'stooq')
+        df = df.sort_index() 
+        # 直近2年分くらいに絞る
+        df = df.tail(500)
+        return df
     except Exception as e:
-        return None, None
+        return None
 
 # --- 関数: 分析ロジック ---
 def analyze_market(df, news_list):
@@ -89,6 +72,7 @@ def analyze_market(df, news_list):
     current_price = df['Close'].iloc[-1]
     sma_50 = df['Close'].rolling(window=50).mean().iloc[-1]
     
+    # RSI計算
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -99,27 +83,27 @@ def analyze_market(df, news_list):
     score = 0
     reasons = []
 
-    # トレンド
+    # トレンド判定
     if current_price > sma_50:
         score += 1
-        reasons.append(f"📈 [トレンド] 上昇中 (現在 ${current_price:.0f} > 50日平均)")
+        reasons.append(f"📈 [トレンド] 上昇中 (現在 ${current_price:.2f} > 50日平均)")
     else:
         score -= 1
-        reasons.append(f"📉 [トレンド] 下落中 (現在 ${current_price:.0f} < 50日平均)")
+        reasons.append(f"📉 [トレンド] 下落中 (現在 ${current_price:.2f} < 50日平均)")
 
-    # RSI
+    # RSI判定
     if current_rsi < 30:
         score += 2
-        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.0f}) → 買い好機")
+        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.1f}) → 反発期待")
     elif current_rsi > 70:
         score -= 2
-        reasons.append(f"🔴 [RSI] 買われすぎ ({current_rsi:.0f}) → 利確推奨")
+        reasons.append(f"🔴 [RSI] 買われすぎ ({current_rsi:.1f}) → 過熱感あり")
     else:
-        reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.0f})")
+        reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.1f})")
 
-    # ニュース判定
-    keywords_good = ['record', 'jump', 'soar', 'buy', 'beat', 'profit', 'upgrade']
-    keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'fail', 'downgrade']
+    # ニュース判定 (Google Newsのタイトル分析)
+    keywords_good = ['record', 'surge', 'jump', 'buy', 'beat', 'profit', 'high']
+    keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'fail', 'low']
     
     news_score = 0
     if news_list:
@@ -130,10 +114,10 @@ def analyze_market(df, news_list):
     
     if news_score > 0:
         score += 1
-        reasons.append("📰 [ニュース] 強気なヘッドラインが多いです")
+        reasons.append("📰 [ニュース] ポジティブな報道が目立ちます")
     elif news_score < 0:
         score -= 1
-        reasons.append("📰 [ニュース] 弱気なヘッドラインが多いです")
+        reasons.append("📰 [ニュース] ネガティブな報道が目立ちます")
 
     # 結論
     if score >= 2:
@@ -152,52 +136,49 @@ def analyze_market(df, news_list):
     return judgment, reasons, color
 
 # --- メイン処理 ---
-st.markdown("##### ※Yahoo Financeへの接続を最適化中...")
+with st.spinner('データを取得中 (Source: Stooq & Google)...'):
+    df = get_stock_price(ticker)
+    news_items = get_google_news(ticker)
 
-hist, info = get_stock_price(ticker)
-news_items = get_rss_news(ticker)
-
-if hist is not None and not hist.empty:
-    # 基本情報
-    col1, col2, col3 = st.columns(3)
-    price = info.get('currentPrice', hist['Close'].iloc[-1])
-    market_cap = info.get('marketCap', 0)
-    
-    col1.metric("株価", f"${price:.2f}")
-    if market_cap > 0:
-        col2.metric("時価総額", f"${market_cap/10**9:.1f} B")
-    else:
-        col2.metric("時価総額", "-") # 取得できなかった場合
+    if df is not None and not df.empty:
+        # 基本情報 (Stooqは株価のみ提供なので、時価総額などは表示不可)
+        current_price = df['Close'].iloc[-1]
+        prev_price = df['Close'].iloc[-2]
+        change = current_price - prev_price
+        change_pct = (change / prev_price) * 100
         
-    col3.metric("PER", f"{info.get('trailingPE', '-')}")
+        col1, col2 = st.columns(2)
+        col1.metric("現在株価", f"${current_price:.2f}")
+        col2.metric("前日比", f"{change:+.2f} ({change_pct:+.2f}%)")
 
-    # AI判定
-    judgment, reasons, color = analyze_market(hist, news_items)
-    st.markdown(f"""
-    <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center;">
-        <h2 style="color: {color}; margin:0;">AI判定: {judgment}</h2>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    for r in reasons:
-        st.write(r)
+        # AI判定
+        judgment, reasons, color = analyze_market(df, news_items)
+        st.markdown(f"""
+        <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center;">
+            <h2 style="color: {color}; margin:0;">AI判定: {judgment}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        for r in reasons:
+            st.write(r)
 
-    # チャート
-    st.subheader("📈 株価チャート")
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=hist.index,
-                    open=hist['Open'], high=hist['High'],
-                    low=hist['Low'], close=hist['Close'], name='Price'))
-    st.plotly_chart(fig, use_container_width=True)
+        # チャート
+        st.subheader("📈 株価チャート")
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=df.index,
+                        open=df['Open'], high=df['High'],
+                        low=df['Low'], close=df['Close'], name='Price'))
+        st.plotly_chart(fig, use_container_width=True)
 
-    # ニュース
-    st.subheader("📰 最新ニュース")
-    if news_items:
-        for news in news_items:
-            pub = news['published'][:16] 
-            st.markdown(f"**[{news['title']}]({news['link']})**")
-            st.caption(f"📅 {pub}")
+        # ニュース
+        st.subheader("📰 Google ニュース")
+        if news_items:
+            for news in news_items:
+                pub = news['published'][:16]
+                st.markdown(f"**[{news['title']}]({news['link']})**")
+                st.caption(f"📅 {pub}")
+        else:
+            st.info("ニュースが見つかりませんでした")
+
     else:
-        st.info("ニュースなし")
-else:
-    st.error("⚠️ Yahoo Financeからブロックされました。数分待ってからリロードするか、別の銘柄を試してください。")
+        st.error("データの取得に失敗しました。時間をおいて再試行してください。")
