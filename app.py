@@ -29,6 +29,7 @@ ticker = FAMOUS_STOCKS[selected_name]
 def get_data(ticker):
     """株価とニュースを取得"""
     stock = yf.Ticker(ticker)
+    # 期間を2年に設定
     hist = stock.history(period="2y")
     info = stock.info
     news = stock.news  # yfinanceの標準機能でニュースを取得
@@ -56,7 +57,7 @@ def analyze_trend(df):
     score = 0
     reasons = []
     
-    # トレンド
+    # トレンド判定
     if current_price > sma_50:
         score += 1
         reasons.append(f"📈 上昇トレンド (現在値 ${current_price:.0f} > 50日平均)")
@@ -64,7 +65,7 @@ def analyze_trend(df):
         score -= 1
         reasons.append(f"📉 下落トレンド (現在値 ${current_price:.0f} < 50日平均)")
         
-    # RSI
+    # RSI判定
     if current_rsi < 30:
         score += 2
         reasons.append(f"🟢 売られすぎ (RSI {current_rsi:.0f}) → 反発期待")
@@ -90,4 +91,39 @@ def analyze_trend(df):
 try:
     hist, info, news = get_data(ticker)
     
-    if hist is not None and not hist.
+    # データの有無を確認（ここが途切れていました）
+    if hist is not None and not hist.empty:
+        
+        # 1. 基本データ表示
+        col1, col2, col3 = st.columns(3)
+        col1.metric("株価", f"${info.get('currentPrice', 0)}")
+        col2.metric("時価総額", f"${info.get('marketCap', 0)/10**9:.1f} B")
+        col3.metric("PER", f"{info.get('trailingPE', 'N/A')}")
+        
+        # 2. AI判定
+        judgment, reasons, color = analyze_trend(hist)
+        st.markdown(f"### AI判定: <span style='color:{color}; font-size: 24px;'>{judgment}</span>", unsafe_allow_html=True)
+        for r in reasons:
+            st.write(f"- {r}")
+
+        # 3. チャート
+        st.subheader("チャート (過去2年)")
+        st.line_chart(hist['Close'])
+        
+        # 4. ニュース表示
+        st.subheader("📰 最新ニュース")
+        if news:
+            for item in news[:5]: # 最新5件を表示
+                title = item.get('title', 'No Title')
+                link = item.get('link', '#')
+                publisher = item.get('publisher', 'Unknown')
+                st.markdown(f"**[{title}]({link})**")
+                st.caption(f"Source: {publisher}")
+        else:
+            st.info("現在、関連ニュースが見つかりませんでした。")
+            
+    else:
+        st.error("データの取得に失敗しました。")
+
+except Exception as e:
+    st.error(f"システムエラー: {e}")
