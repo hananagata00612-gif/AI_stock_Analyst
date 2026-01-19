@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas_datareader.data as web
 import pandas as pd
 import feedparser
 import plotly.graph_objects as go
@@ -8,9 +7,9 @@ from datetime import datetime
 
 # ページ設定
 st.set_page_config(page_title="Real Stock Analyst", layout="wide")
-st.title("📈 米国株AI分析 (Stooq & Google版)")
+st.title("📈 米国株AI分析 (Direct CSV版)")
 
-# 有名銘柄リスト (Stooq用のシンボル)
+# 有名銘柄リスト
 FAMOUS_STOCKS = {
     "NVIDIA": "NVDA",
     "Apple": "AAPL",
@@ -32,14 +31,13 @@ ticker = FAMOUS_STOCKS[selected_name]
 @st.cache_data(ttl=600)
 def get_google_news(ticker):
     """Google News RSSからニュースを取得"""
-    # 検索クエリを作成 (例: NVDA stock)
     query = f"{ticker} stock"
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
     
     try:
         feed = feedparser.parse(rss_url)
         news_items = []
-        for entry in feed.entries[:5]: # 最新5件
+        for entry in feed.entries[:5]:
             news_items.append({
                 'title': entry.title,
                 'link': entry.link,
@@ -49,18 +47,22 @@ def get_google_news(ticker):
     except Exception:
         return []
 
-# --- 関数: 株価取得 (Stooq) ---
+# --- 関数: 株価取得 (CSV直読み) ---
 @st.cache_data(ttl=600)
 def get_stock_price(ticker):
-    """Stooqから株価データを取得"""
+    """StooqからCSVを直接読み込む (ライブラリ不要)"""
     try:
-        # Stooqからデータを取得 (過去2年分)
-        # Stooqは日付が新しい順で返ってくるので、sort_indexで古い順に並べ替える
-        df = web.DataReader(ticker, 'stooq')
-        df = df.sort_index() 
-        # 直近2年分くらいに絞る
-        df = df.tail(500)
-        return df
+        # StooqのCSVダウンロードURLを直接叩く
+        url = f"https://stooq.com/q/d/l/?s={ticker}.us&i=d"
+        df = pd.read_csv(url)
+        
+        # データの整形
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        df = df.sort_index() # 古い順に並び替え
+        
+        # 直近500日分を返す
+        return df.tail(500)
     except Exception as e:
         return None
 
@@ -94,14 +96,14 @@ def analyze_market(df, news_list):
     # RSI判定
     if current_rsi < 30:
         score += 2
-        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.1f}) → 反発期待")
+        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.1f}) → 買い好機")
     elif current_rsi > 70:
         score -= 2
         reasons.append(f"🔴 [RSI] 買われすぎ ({current_rsi:.1f}) → 過熱感あり")
     else:
         reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.1f})")
 
-    # ニュース判定 (Google Newsのタイトル分析)
+    # ニュース判定
     keywords_good = ['record', 'surge', 'jump', 'buy', 'beat', 'profit', 'high']
     keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'fail', 'low']
     
@@ -136,16 +138,21 @@ def analyze_market(df, news_list):
     return judgment, reasons, color
 
 # --- メイン処理 ---
-with st.spinner('データを取得中 (Source: Stooq & Google)...'):
+with st.spinner('データを取得中 (Source: Stooq Direct & Google)...'):
     df = get_stock_price(ticker)
     news_items = get_google_news(ticker)
 
     if df is not None and not df.empty:
-        # 基本情報 (Stooqは株価のみ提供なので、時価総額などは表示不可)
+        # 基本情報
         current_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2]
-        change = current_price - prev_price
-        change_pct = (change / prev_price) * 100
+        # 前日比の計算（データがある場合のみ）
+        if len(df) >= 2:
+            prev_price = df['Close'].iloc[-2]
+            change = current_price - prev_price
+            change_pct = (change / prev_price) * 100
+        else:
+            change = 0
+            change_pct = 0
         
         col1, col2 = st.columns(2)
         col1.metric("現在株価", f"${current_price:.2f}")
