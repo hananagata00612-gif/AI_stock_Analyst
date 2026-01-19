@@ -3,3 +3,4 @@ pandas
 plotly
 feedparser
 requests
+yfinance
