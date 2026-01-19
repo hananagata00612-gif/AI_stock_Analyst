@@ -1,5 +1,6 @@
 streamlit
 yfinance
 plotly
-openai
-duckduckgo-search
+pandas
+feedparser
+requests
