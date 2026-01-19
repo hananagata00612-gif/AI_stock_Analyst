@@ -5,29 +5,29 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime
 
-# --- 1. ページ設定 (必ず一番最初に書く) ---
+# --- 1. ページ設定 (読み込み速度アップのため最優先) ---
 st.set_page_config(
     page_title="Stock AI Pro", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. ダークモードを強制するCSS (白飛び対策) ---
+# --- 2. 白飛び完全防止 (CSSで背景色を固定) ---
 st.markdown("""
     <style>
-        [data-testid="stAppViewContainer"] {
+        .stApp {
             background-color: #0e1117;
             color: #ffffff;
         }
-        [data-testid="stSidebar"] {
+        section[data-testid="stSidebar"] {
             background-color: #262730;
         }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 米国株AI分析 (Stable Edition)")
+st.title("📈 米国株AI分析 (Speed & Stable)")
 
-# --- ★ここにAPIキーを貼る ---
+# --- ★APIキー設定 ---
 API_KEY = "aaa2294ad1124462b54f453da3a8dc3b" 
 
 # 銘柄リスト
@@ -39,25 +39,23 @@ FAMOUS_STOCKS = {
 }
 
 st.sidebar.header("銘柄選択")
+# index=0 にすることで、リロード時に一番上の銘柄に戻るのを防ぐ工夫も可能ですが今回はシンプルに
 selected_name = st.sidebar.selectbox("分析対象", list(FAMOUS_STOCKS.keys()))
 ticker = FAMOUS_STOCKS[selected_name]
 
-# --- 関数: ニュース取得 (強化版: ブラウザ偽装) ---
-@st.cache_data(ttl=600) # 10分間キャッシュ
+# --- 関数: ニュース取得 (タイムアウト設定でフリーズ回避) ---
+@st.cache_data(ttl=600)
 def get_google_news(ticker):
-    """Google News RSSをブラウザのふりをして取得"""
     query = f"{ticker} stock"
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
     
-    # Googleにブロックされないためのヘッダー
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     
     try:
-        # requestsでまずXMLを取得
-        response = requests.get(rss_url, headers=headers, timeout=5)
-        # 取得したテキストを解析
+        # ★重要: timeout=3 (3秒で返事がなければ諦めて次へ進む)
+        response = requests.get(rss_url, headers=headers, timeout=3)
         feed = feedparser.parse(response.content)
         
         news_items = []
@@ -70,10 +68,10 @@ def get_google_news(ticker):
                 })
         return news_items
     except Exception:
-        return []
+        return [] # エラーが出ても空リストを返してアプリを止めない
 
-# --- 関数: 株価取得 (Twelve Data API) ---
-@st.cache_data(ttl=3600) # 1時間キャッシュ (白飛び・点滅防止の要)
+# --- 関数: 株価取得 (エラーハンドリング強化) ---
+@st.cache_data(ttl=3600)
 def get_stock_price(ticker, api_key):
     if "ここに" in api_key:
         return None, "KeyError"
@@ -81,16 +79,17 @@ def get_stock_price(ticker, api_key):
     url = f"https://api.twelvedata.com/time_series?symbol={ticker}&interval=1day&outputsize=365&apikey={api_key}"
     
     try:
-        response = requests.get(url, timeout=10).json()
+        # ★重要: ここもtimeout設定
+        response = requests.get(url, timeout=5).json()
         
         if "values" not in response:
-            return None, "ApiError"
+            # API制限(1分間に8回)に引っかかった場合など
+            return None, "ApiLimit"
             
         df = pd.DataFrame(response['values'])
         df['datetime'] = pd.to_datetime(df['datetime'])
         df.set_index('datetime', inplace=True)
         
-        # 数値変換と列名の整理
         cols = ['open', 'high', 'low', 'close']
         for c in cols:
             df[c] = pd.to_numeric(df[c])
@@ -109,7 +108,7 @@ def analyze_market(df, news_list):
     current = df['Close'].iloc[-1]
     sma_50 = df['Close'].rolling(window=50).mean().iloc[-1]
     
-    # RSI計算
+    # RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -120,7 +119,7 @@ def analyze_market(df, news_list):
     score = 0
     reasons = []
 
-    # テクニカル判定
+    # トレンド
     if current > sma_50:
         score += 1
         reasons.append(f"📈 [トレンド] 上昇中 (${current:.2f} > 50日平均)")
@@ -128,6 +127,7 @@ def analyze_market(df, news_list):
         score -= 1
         reasons.append(f"📉 [トレンド] 下落中 (${current:.2f} < 50日平均)")
 
+    # RSI
     if current_rsi < 30:
         score += 2
         reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.0f}) → 反発期待")
@@ -137,7 +137,7 @@ def analyze_market(df, news_list):
     else:
         reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.0f})")
 
-    # ニュース判定
+    # ニュース
     keywords_good = ['surge', 'jump', 'record', 'buy', 'beat', 'profit', 'high']
     keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'low', 'fail']
     
@@ -150,12 +150,11 @@ def analyze_market(df, news_list):
     
     if news_score > 0:
         score += 1
-        reasons.append("📰 [ニュース] ポジティブ報道が優勢")
+        reasons.append("📰 [ニュース] ポジティブ報道優勢")
     elif news_score < 0:
         score -= 1
-        reasons.append("📰 [ニュース] ネガティブ報道が優勢")
+        reasons.append("📰 [ニュース] ネガティブ報道優勢")
 
-    # 結論
     if score >= 2:
         judgment, color = "Strong Buy", "#ff4b4b"
     elif score == 1:
@@ -168,14 +167,18 @@ def analyze_market(df, news_list):
     return judgment, reasons, color
 
 # --- メイン処理 ---
-with st.spinner('AIが市場データを分析しています...'):
+# ★スピナー（読み込み中のぐるぐる）を軽くする
+with st.spinner('Loading...'):
     df, status = get_stock_price(ticker, API_KEY)
+    # ニュース取得は失敗しても株価表示を止めないように独立させる
     news_items = get_google_news(ticker)
 
     if status == "KeyError":
-        st.error("⚠️ APIキーを設定してください (コード内の API_KEY = ... の部分)")
+        st.error("⚠️ APIキーを設定してください")
+    elif status == "ApiLimit":
+        st.warning("⚠️ API制限（1分間に8回）のためデータを取得できませんでした。少し待ってから別の銘柄を選んでください。")
     elif status != "Success" or df is None:
-        st.error("データの取得に失敗しました。少し待ってからリロードしてください。")
+        st.error("データ取得エラー。リロードしてください。")
     else:
         # 基本情報
         current = df['Close'].iloc[-1]
@@ -215,4 +218,4 @@ with st.spinner('AIが市場データを分析しています...'):
                 st.markdown(f"**[{news['title']}]({news['link']})**")
                 st.caption(f"📅 {pub}")
         else:
-            st.info("ニュースが見つかりませんでした")
+            st.info("ニュースなし")
