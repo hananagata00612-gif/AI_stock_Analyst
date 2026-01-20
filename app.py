@@ -6,8 +6,27 @@ import requests
 from datetime import datetime
 
 # --- 1. ページ設定 ---
-st.set_page_config(
-    page_title="Stock AI Pro", 
+# After (ブログ用：ちょっと堅くする)
+st.set_page_config(page_title="Market Sentiment Analyzer", ...)
+# これを app.py の上の方（st.set_page_configの直後）に追加
+st.markdown("""
+    <style>
+    /* 全体を白背景、文字を黒に */
+    .stApp {
+        background-color: #ffffff;
+        color: #333333;
+    }
+    /* サイドバーを青っぽく */
+    section[data-testid="stSidebar"] {
+        background-color: #f0f2f6;
+    }
+    /* ヘッダーの色を変える */
+    h1, h2, h3 {
+        color: #2c3e50 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+st.title("Financial Data Visualizer"), 
     layout="wide",
     initial_sidebar_state="expanded"
 )
