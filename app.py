@@ -5,46 +5,37 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime
 
-# --- 1. ページ設定 ---
-# After (ブログ用：ちょっと堅くする)
-st.set_page_config(page_title="Market Sentiment Analyzer", ...)
-# これを app.py の上の方（st.set_page_configの直後）に追加
-st.markdown("""
-    <style>
-    /* 全体を白背景、文字を黒に */
-    .stApp {
-        background-color: #ffffff;
-        color: #333333;
-    }
-    /* サイドバーを青っぽく */
-    section[data-testid="stSidebar"] {
-        background-color: #f0f2f6;
-    }
-    /* ヘッダーの色を変える */
-    h1, h2, h3 {
-        color: #2c3e50 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-st.title("Financial Data Visualizer"), 
+# --- 1. ページ設定 (ブログ用にタイトルを堅く変更) ---
+st.set_page_config(
+    page_title="Market Sentiment Analyzer", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. スタイル設定 ---
+# --- 2. スタイル設定 (迷彩用: 白背景・ダークテキスト) ---
 st.markdown("""
     <style>
+        /* 全体の背景を白に */
         .stApp {
-            background-color: #0e1117;
-            color: #ffffff;
+            background-color: #ffffff;
+            color: #333333;
         }
+        /* サイドバーを薄いグレーに */
         section[data-testid="stSidebar"] {
-            background-color: #262730;
+            background-color: #f8f9fa;
+        }
+        /* 文字色を強制的に黒っぽく */
+        h1, h2, h3, p, div, span {
+            color: #2c3e50;
+        }
+        /* メトリック（株価）の文字色 */
+        [data-testid="stMetricValue"] {
+            color: #2c3e50 !important;
         }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 米国株AI分析 (Visual Status)")
+st.title("📊 Financial Data Visualizer (Alpha)")
 
 # --- ★APIキー設定 ---
 API_KEY = "aaa2294ad1124462b54f453da3a8dc3b" 
@@ -57,8 +48,8 @@ FAMOUS_STOCKS = {
     "JPMorgan": "JPM"
 }
 
-st.sidebar.header("銘柄選択")
-selected_name = st.sidebar.selectbox("分析対象", list(FAMOUS_STOCKS.keys()))
+st.sidebar.header("Select Ticker")
+selected_name = st.sidebar.selectbox("Symbol", list(FAMOUS_STOCKS.keys()))
 ticker = FAMOUS_STOCKS[selected_name]
 
 # --- 関数: ニュース取得 ---
@@ -95,7 +86,6 @@ def get_stock_price(ticker, api_key):
     url = f"https://api.twelvedata.com/time_series?symbol={ticker}&interval=1day&outputsize=365&apikey={api_key}"
     
     try:
-        # タイムアウトを10秒に設定
         response = requests.get(url, timeout=10).json()
         
         if "values" not in response:
@@ -118,12 +108,11 @@ def get_stock_price(ticker, api_key):
 # --- 分析ロジック ---
 def analyze_market(df, news_list):
     if df is None or len(df) < 20:
-        return "データ不足", [], "gray"
+        return "Insufficient Data", [], "gray"
 
     current = df['Close'].iloc[-1]
     sma_50 = df['Close'].rolling(window=50).mean().iloc[-1]
     
-    # RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -134,25 +123,22 @@ def analyze_market(df, news_list):
     score = 0
     reasons = []
 
-    # トレンド
     if current > sma_50:
         score += 1
-        reasons.append(f"📈 [トレンド] 上昇中 (${current:.2f} > 50日平均)")
+        reasons.append(f"📈 [Trend] Bullish (${current:.2f} > SMA50)")
     else:
         score -= 1
-        reasons.append(f"📉 [トレンド] 下落中 (${current:.2f} < 50日平均)")
+        reasons.append(f"📉 [Trend] Bearish (${current:.2f} < SMA50)")
 
-    # RSI
     if current_rsi < 30:
         score += 2
-        reasons.append(f"🟢 [RSI] 売られすぎ ({current_rsi:.0f}) → 反発期待")
+        reasons.append(f"🟢 [RSI] Oversold ({current_rsi:.0f})")
     elif current_rsi > 70:
         score -= 2
-        reasons.append(f"🔴 [RSI] 買われすぎ ({current_rsi:.0f}) → 利確推奨")
+        reasons.append(f"🔴 [RSI] Overbought ({current_rsi:.0f})")
     else:
-        reasons.append(f"⚖️ [RSI] 中立 ({current_rsi:.0f})")
+        reasons.append(f"⚖️ [RSI] Neutral ({current_rsi:.0f})")
 
-    # ニュース
     keywords_good = ['surge', 'jump', 'record', 'buy', 'beat', 'profit', 'high']
     keywords_bad = ['drop', 'fall', 'miss', 'loss', 'cut', 'low', 'fail']
     
@@ -165,88 +151,84 @@ def analyze_market(df, news_list):
     
     if news_score > 0:
         score += 1
-        reasons.append("📰 [ニュース] ポジティブ報道優勢")
+        reasons.append("📰 [News] Positive Sentiment")
     elif news_score < 0:
         score -= 1
-        reasons.append("📰 [ニュース] ネガティブ報道優勢")
+        reasons.append("📰 [News] Negative Sentiment")
 
     if score >= 2:
-        judgment, color = "Strong Buy", "#ff4b4b"
+        judgment, color = "Strong Buy", "#d9534f" # 赤 (白背景用)
     elif score == 1:
-        judgment, color = "Buy", "#ffa421"
+        judgment, color = "Buy", "#f0ad4e" # オレンジ
     elif score <= -1:
-        judgment, color = "Sell", "#1c83e1"
+        judgment, color = "Sell", "#0275d8" # 青
     else:
         judgment, color = "Hold", "gray"
 
     return judgment, reasons, color
 
 # --- メイン処理 ---
-
-# 1. 進捗を表示する「ステータスバー」を作成
-with st.status("AIがデータを分析中...", expanded=True) as status:
+with st.status("Analyzing Market Data...", expanded=True) as status:
     
-    st.write("1. 株価データを取得しています...")
+    st.write("Fetching Market Data...")
     df, api_status = get_stock_price(ticker, API_KEY)
     
     if api_status == "Success":
-        st.write("✅ 株価データの取得完了")
-    elif api_status == "ApiLimit":
-        st.warning("⚠️ APIの制限回数を超えました（1分待ってください）")
+        st.write("✅ Market Data Loaded")
     else:
-        st.error("❌ 株価データの取得に失敗")
+        st.write("⚠️ Data Fetching Issue")
 
-    st.write("2. 関連ニュースを検索しています...")
+    st.write("Scanning News Headlines...")
     news_items = get_google_news(ticker)
-    st.write("✅ ニュース検索完了")
+    st.write("✅ News Scan Complete")
     
-    status.update(label="分析完了！", state="complete", expanded=False)
+    status.update(label="Analysis Complete", state="complete", expanded=False)
 
-# 2. 結果表示
 if api_status == "KeyError":
-    st.error("⚠️ APIキーを設定してください")
+    st.error("⚠️ Please set your API Key.")
 elif api_status != "Success" or df is None:
-    if api_status == "ApiLimit":
-        st.warning("現在アクセスが集中しています。Twelve Dataの無料プランは「1分間に8回」の制限があります。少しゆっくり操作してください。")
-    else:
-        st.error("データの取得に失敗しました。リロードしてください。")
+    st.error("Data fetch error. Please reload.")
 else:
-    # 基本情報
     current = df['Close'].iloc[-1]
     prev = df['Close'].iloc[-2]
     change = current - prev
     pct = (change / prev) * 100
     
     col1, col2 = st.columns(2)
-    col1.metric("株価", f"${current:.2f}")
-    col2.metric("前日比", f"{change:+.2f} ({pct:+.2f}%)")
+    col1.metric("Current Price", f"${current:.2f}")
+    col2.metric("Change", f"{change:+.2f} ({pct:+.2f}%)")
 
-    # AI判定
     judgment, reasons, color = analyze_market(df, news_items)
+    
+    # 判定ボックス (白背景に合わせて調整)
     st.markdown(f"""
-    <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center; background-color: rgba(255,255,255,0.05);">
-        <h2 style="color: {color}; margin:0;">AI判定: {judgment}</h2>
+    <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center; background-color: #f9f9f9;">
+        <h2 style="color: {color}; margin:0;">AI Verdict: {judgment}</h2>
     </div>
     """, unsafe_allow_html=True)
     
     for r in reasons:
         st.write(r)
 
-    # チャート
-    st.subheader("📈 株価チャート")
+    st.subheader("📈 Price Chart")
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df.index,
                     open=df['Open'], high=df['High'],
                     low=df['Low'], close=df['Close'], name='Price'))
-    fig.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
+    fig.update_layout(
+        height=400, 
+        margin=dict(l=20, r=20, t=20, b=20),
+        plot_bgcolor='white', # チャート背景も白に
+        paper_bgcolor='white',
+        font=dict(color='black')
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-    # ニュース
-    st.subheader("📰 Googleニュース")
+    st.subheader("📰 Latest News")
     if news_items:
         for news in news_items:
             pub = news['published'][:16]
             st.markdown(f"**[{news['title']}]({news['link']})**")
             st.caption(f"📅 {pub}")
     else:
-        st.info("ニュースなし")
+        st.info("No news found.")
